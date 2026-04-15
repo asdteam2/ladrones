@@ -4,13 +4,21 @@ const prisma = require('../config/prisma');
 const { loginSchema, registerSchema } = require('../utils/schemas');
 
 function createToken(user) {
+  const secret = process.env.JWT_SECRET;
+
+  if (!secret || !secret.trim()) {
+    const error = new Error('JWT_SECRET no esta configurado en el servidor.');
+    error.statusCode = 500;
+    throw error;
+  }
+
   return jwt.sign(
     {
       id: user.id,
       email: user.email,
       role: user.role,
     },
-    process.env.JWT_SECRET,
+    secret,
     { expiresIn: process.env.JWT_EXPIRES_IN || '7d' },
   );
 }

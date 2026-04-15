@@ -12,6 +12,23 @@ const errorHandler = require('./middlewares/errorHandler');
 
 const app = express();
 
+function resolveTrustProxySetting() {
+  const rawValue = process.env.TRUST_PROXY;
+
+  if (!rawValue) {
+    return process.env.NODE_ENV === 'production' ? 1 : false;
+  }
+
+  const normalized = rawValue.trim().toLowerCase();
+  if (normalized === 'true') return true;
+  if (normalized === 'false') return false;
+
+  const asNumber = Number.parseInt(normalized, 10);
+  if (!Number.isNaN(asNumber)) return asNumber;
+
+  return rawValue;
+}
+
 function parseAllowedOrigins() {
   const singleOrigin = process.env.CORS_ORIGIN || '';
   const multiOrigins = process.env.CORS_ORIGINS || '';
@@ -40,6 +57,7 @@ const corsOptions = {
   },
 };
 
+app.set('trust proxy', resolveTrustProxySetting());
 app.use(helmet());
 app.use(cors(corsOptions));
 app.use(morgan('dev'));

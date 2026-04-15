@@ -12,12 +12,36 @@ const errorHandler = require('./middlewares/errorHandler');
 
 const app = express();
 
+function parseAllowedOrigins() {
+  const singleOrigin = process.env.CORS_ORIGIN || '';
+  const multiOrigins = process.env.CORS_ORIGINS || '';
+
+  return `${singleOrigin},${multiOrigins}`
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+}
+
+const allowedOrigins = parseAllowedOrigins();
+const corsOptions = {
+  origin(origin, callback) {
+    // Allow non-browser requests (curl, health checks) without Origin header.
+    if (!origin) {
+      callback(null, true);
+      return;
+    }
+
+    if (allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+      callback(null, true);
+      return;
+    }
+
+    callback(new Error(`Origen no permitido por CORS: ${origin}`));
+  },
+};
+
 app.use(helmet());
-app.use(
-  cors({
-    origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
-  }),
-);
+app.use(cors(corsOptions));
 app.use(morgan('dev'));
 app.use(express.json({ limit: '1mb' }));
 app.use(apiLimiter);

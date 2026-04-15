@@ -102,6 +102,21 @@ El repositorio quedo organizado para que GitHub Pages sirva el frontend desde la
 
 Importante: GitHub Pages solo puede servir el frontend estatico. El backend Express y PostgreSQL deben seguir desplegados aparte.
 
+### Si aparece error CORS con localhost desde GitHub Pages
+
+Ese error ocurre cuando el frontend publicado llama a `http://localhost:4000/api`.
+
+1. Crea `frontend/.env.production` con:
+   `VITE_API_URL="https://TU-BACKEND.up.railway.app/api"`
+2. Vuelve a compilar y publicar:
+   `cd frontend && npm run build:github`
+3. En Railway, configura en backend:
+   - `CORS_ORIGIN="http://localhost:5173"`
+   - `CORS_ORIGINS="https://asdteam2.github.io"`
+4. Redeploy del backend en Railway.
+
+Con eso, GitHub Pages dejara de llamar a localhost y podra consumir tu API real.
+
 ## Cuentas y roles
 
 - Registro e inicio de sesion disponibles en la interfaz.

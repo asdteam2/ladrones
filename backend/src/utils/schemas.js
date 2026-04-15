@@ -14,7 +14,7 @@ const evidenceSchema = z.object({
 
 const reportSchema = z
   .object({
-    type: z.enum(['SCAM', 'STOLEN_VEHICLE']),
+    type: z.enum(['SCAM', 'VEHICLE']),
     name: z.string().max(120).optional().or(z.literal('')),
     rut: z.string().max(20).optional().or(z.literal('')),
     plate: z.string().max(20).optional().or(z.literal('')),

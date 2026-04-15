@@ -1,87 +1,68 @@
-import { useEffect, useMemo, useState } from 'react'
+import { startTransition, useDeferredValue, useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
+import { Navbar } from './components/Navbar'
+import { ResultCard } from './components/ResultCard'
+import { StatusBadge } from './components/StatusBadge'
 import { api, setAuthToken } from './lib/api'
+import type { Report, ReportType, Session } from './types'
 import { normalizePlate, normalizeRut } from './utils/normalize'
 
-type Role = 'USER' | 'ADMIN'
-type ReportType = 'SCAM' | 'STOLEN_VEHICLE'
-type ReportStatus = 'PENDING' | 'VERIFIED' | 'REJECTED'
-
-type Evidence = {
-  id: number
-  type: 'TEXT' | 'IMAGE'
-  text: string | null
-  url: string | null
-}
-
-type Report = {
-  id: number
-  type: ReportType
-  name: string | null
-  rut: string | null
-  plate: string | null
-  description: string
-  status: ReportStatus
-  createdAt: string
-  moderationNote: string | null
-  evidence: Evidence[]
-}
-
 const DISCLAIMER =
-  'La informacion publicada es de caracter referencial y debe ser verificada por el usuario. La plataforma no se responsabiliza por el uso indebido de los datos.'
+  'Esta plataforma muestra reportes generados por usuarios. La informacion debe ser verificada antes de tomar decisiones.'
 
-function getStoredSession() {
-  const raw = localStorage.getItem('ciudadano-session')
+function getStoredSession(): Session | null {
+  const raw = localStorage.getItem('riskverify-session')
   if (!raw) return null
 
   try {
-    return JSON.parse(raw) as { token: string; email: string; role: Role }
+    return JSON.parse(raw) as Session
   } catch {
     return null
   }
 }
 
 function App() {
-  const [activeTab, setActiveTab] = useState<'search' | 'report' | 'admin'>('search')
-  const [session, setSession] = useState(getStoredSession)
-  const [search, setSearch] = useState('')
-  const [searchResults, setSearchResults] = useState<Report[]>([])
-  const [searchMessage, setSearchMessage] = useState('')
-  const [isLoadingSearch, setIsLoadingSearch] = useState(false)
-  const [isSubmittingReport, setIsSubmittingReport] = useState(false)
-  const [pendingReports, setPendingReports] = useState<Report[]>([])
-  const [adminMessage, setAdminMessage] = useState('')
-
+  const [session, setSession] = useState<Session | null>(getStoredSession)
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login')
   const [authEmail, setAuthEmail] = useState('')
   const [authPassword, setAuthPassword] = useState('')
   const [authError, setAuthError] = useState('')
+
+  const [search, setSearch] = useState('')
+  const deferredSearch = useDeferredValue(search)
+  const [searchResults, setSearchResults] = useState<Report[]>([])
+  const [searchMessage, setSearchMessage] = useState('')
+  const [isLoadingSearch, setIsLoadingSearch] = useState(false)
+  const [selectedReport, setSelectedReport] = useState<Report | null>(null)
+  const [detailMessage, setDetailMessage] = useState('')
 
   const [reportType, setReportType] = useState<ReportType>('SCAM')
   const [reportName, setReportName] = useState('')
   const [reportRut, setReportRut] = useState('')
   const [reportPlate, setReportPlate] = useState('')
   const [reportDescription, setReportDescription] = useState('')
-  const [evidenceText, setEvidenceText] = useState('')
   const [evidenceUrl, setEvidenceUrl] = useState('')
   const [acceptedDisclaimer, setAcceptedDisclaimer] = useState(false)
   const [reportMessage, setReportMessage] = useState('')
+  const [isSubmittingReport, setIsSubmittingReport] = useState(false)
+
+  const [pendingReports, setPendingReports] = useState<Report[]>([])
+  const [adminMessage, setAdminMessage] = useState('')
+
+  const isAdmin = session?.role === 'ADMIN'
 
   useEffect(() => {
-    if (session?.token) {
-      setAuthToken(session.token)
-    }
+    setAuthToken(session?.token || null)
   }, [session])
 
   useEffect(() => {
     if (session) {
-      localStorage.setItem('ciudadano-session', JSON.stringify(session))
-    } else {
-      localStorage.removeItem('ciudadano-session')
+      localStorage.setItem('riskverify-session', JSON.stringify(session))
+      return
     }
-  }, [session])
 
-  const isAdmin = session?.role === 'ADMIN'
+    localStorage.removeItem('riskverify-session')
+  }, [session])
 
   const normalizedSearch = useMemo(() => {
     const rut = normalizeRut(search)
@@ -92,22 +73,58 @@ function App() {
     }
   }, [search])
 
-  async function runSearch(event?: FormEvent) {
-    event?.preventDefault()
+  useEffect(() => {
+    const query = deferredSearch.trim()
+
+    if (!query) {
+      setSearchResults([])
+      setSearchMessage('')
+      setSelectedReport(null)
+      setDetailMessage('')
+      return
+    }
+
+    const timer = window.setTimeout(() => {
+      void runSearch(query)
+    }, 300)
+
+    return () => window.clearTimeout(timer)
+  }, [deferredSearch])
+
+  async function runSearch(query: string) {
     setIsLoadingSearch(true)
-    setSearchMessage('')
+    setDetailMessage('')
 
     try {
-      const response = await api.get('/reports/search', {
-        params: { q: search },
-      })
+      const response = await api.get('/search', { params: { q: query } })
       const items = (response.data.items || []) as Report[]
-      setSearchResults(items)
-      setSearchMessage(items.length ? '' : 'No hay coincidencias verificadas para esa busqueda.')
+
+      startTransition(() => {
+        setSearchResults(items)
+        setSearchMessage(items.length ? 'Este registro ha sido reportado.' : 'No hay reportes.')
+      })
+
+      if (items[0]) {
+        void loadReportDetail(items[0].id)
+      } else {
+        setSelectedReport(null)
+      }
     } catch (error: any) {
       setSearchMessage(error.response?.data?.error || 'No se pudo realizar la busqueda.')
+      setSearchResults([])
+      setSelectedReport(null)
     } finally {
       setIsLoadingSearch(false)
+    }
+  }
+
+  async function loadReportDetail(reportId: number) {
+    try {
+      const response = await api.get(`/reports/${reportId}`)
+      setSelectedReport(response.data.item || null)
+      setDetailMessage('')
+    } catch (error: any) {
+      setDetailMessage(error.response?.data?.error || 'No fue posible cargar el detalle.')
     }
   }
 
@@ -137,12 +154,12 @@ function App() {
     setReportMessage('')
 
     if (!acceptedDisclaimer) {
-      setReportMessage('Debes aceptar el disclaimer legal para enviar un reporte.')
+      setReportMessage('Debes aceptar el disclaimer legal para enviar el reporte.')
       return
     }
 
     if (!session?.token) {
-      setReportMessage('Debes iniciar sesion para enviar reportes.')
+      setReportMessage('Debes iniciar sesion para crear reportes.')
       return
     }
 
@@ -159,11 +176,8 @@ function App() {
       return
     }
 
-    const evidence = [] as Array<{ type: 'TEXT' | 'IMAGE'; value: string }>
-    if (evidenceText.trim()) evidence.push({ type: 'TEXT', value: evidenceText.trim() })
-    if (evidenceUrl.trim()) evidence.push({ type: 'IMAGE', value: evidenceUrl.trim() })
-
     setIsSubmittingReport(true)
+
     try {
       await api.post('/reports', {
         type: reportType,
@@ -172,15 +186,14 @@ function App() {
         plate: normalizedPlate.value || '',
         description: reportDescription,
         legalAccepted: true,
-        evidence,
+        evidence: evidenceUrl.trim() ? [{ type: 'IMAGE', value: evidenceUrl.trim() }] : [],
       })
 
-      setReportMessage('Reporte recibido. Quedara en estado pendiente hasta revision de moderacion.')
+      setReportMessage('Reporte enviado. Quedo en estado pendiente hasta revision de un administrador.')
       setReportName('')
       setReportRut('')
       setReportPlate('')
       setReportDescription('')
-      setEvidenceText('')
       setEvidenceUrl('')
       setAcceptedDisclaimer(false)
     } catch (error: any) {
@@ -192,7 +205,7 @@ function App() {
 
   async function loadPendingReports() {
     if (!isAdmin) {
-      setAdminMessage('Necesitas permisos de administrador.')
+      setAdminMessage('Solo un administrador puede revisar reportes pendientes.')
       return
     }
 
@@ -205,19 +218,19 @@ function App() {
     }
   }
 
-  async function moderateReport(id: number, action: 'APPROVE' | 'REJECT') {
+  async function moderateReport(reportId: number, action: 'APPROVE' | 'REJECT') {
     try {
-      await api.patch(`/admin/reports/${id}/moderate`, { action })
-      setPendingReports((prev) => prev.filter((item) => item.id !== id))
+      await api.patch(`/reports/${reportId}`, { action })
+      setPendingReports((current) => current.filter((item) => item.id !== reportId))
     } catch (error: any) {
-      setAdminMessage(error.response?.data?.error || 'No fue posible actualizar el reporte.')
+      setAdminMessage(error.response?.data?.error || 'No fue posible actualizar el estado.')
     }
   }
 
-  async function deleteReport(id: number) {
+  async function deleteReport(reportId: number) {
     try {
-      await api.delete(`/admin/reports/${id}`)
-      setPendingReports((prev) => prev.filter((item) => item.id !== id))
+      await api.delete(`/admin/reports/${reportId}`)
+      setPendingReports((current) => current.filter((item) => item.id !== reportId))
     } catch (error: any) {
       setAdminMessage(error.response?.data?.error || 'No fue posible eliminar el reporte.')
     }
@@ -225,294 +238,324 @@ function App() {
 
   function logout() {
     setSession(null)
+    setPendingReports([])
     setAuthEmail('')
     setAuthPassword('')
     setAuthError('')
-    setPendingReports([])
-    setAuthToken(null)
   }
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_#f6f3eb,_#e9ece6_45%,_#d9dfd2)] text-slate-900">
-      <header className="mx-auto max-w-6xl px-4 pb-4 pt-6 md:px-6">
-        <div className="rounded-3xl border border-amber-700/20 bg-amber-50/90 p-4 text-sm text-amber-900 shadow-md backdrop-blur">
-          <p className="font-medium">Aviso legal obligatorio</p>
-          <p>{DISCLAIMER}</p>
-        </div>
+    <div className="min-h-screen bg-[#f9fafb] text-slate-900">
+      <Navbar sessionEmail={session?.email} roleLabel={session?.role} onLogout={logout} />
 
-        <div className="mt-5 flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <h1 className="font-display text-4xl tracking-tight md:text-5xl">Radar Ciudadano</h1>
-            <p className="mt-2 max-w-xl text-slate-700">
-              Plataforma de reportes ciudadanos sobre posibles estafas y vehiculos robados, con
-              publicacion solo tras revision de moderacion.
+      <main className="mx-auto max-w-7xl px-4 pb-16 md:px-6">
+        <section className="grid gap-8 pb-14 pt-10 lg:grid-cols-[1.15fr_0.85fr] lg:items-center">
+          <div className="relative overflow-hidden rounded-[2rem] border border-slate-200 bg-white px-6 py-10 shadow-[0_24px_80px_rgba(15,23,42,0.08)] md:px-10">
+            <div className="absolute inset-x-10 top-0 h-32 rounded-full bg-violet-200/50 blur-3xl" />
+            <p className="relative text-sm font-semibold uppercase tracking-[0.24em] text-violet-600">
+              Verificacion de riesgo en segundos
             </p>
-          </div>
+            <h1 className="relative mt-4 max-w-2xl font-display text-5xl leading-tight text-slate-950 md:text-6xl">
+              Verifica antes de transferir
+            </h1>
+            <p className="relative mt-4 max-w-2xl text-lg leading-8 text-slate-600">
+              Consulta nombres, RUT o patentes normalizadas para detectar posibles estafas y
+              vehiculos reportados antes de tomar una decision.
+            </p>
 
-          <div className="rounded-2xl border border-slate-800/10 bg-white/70 p-4 shadow-sm">
-            {session ? (
-              <div className="space-y-2 text-sm">
-                <p className="font-semibold text-slate-700">Sesion activa</p>
-                <p>{session.email}</p>
-                <p className="text-xs uppercase tracking-wide text-emerald-700">Rol: {session.role}</p>
+            <div id="buscar" className="relative mt-8 rounded-[1.75rem] border border-slate-200 bg-slate-50 p-3 shadow-inner">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center">
+                <input
+                  className="h-16 flex-1 rounded-[1.2rem] border border-slate-200 bg-white px-5 text-lg outline-none ring-0 placeholder:text-slate-400 focus:border-violet-400"
+                  placeholder="Busca por nombre, RUT o patente"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                />
                 <button
-                  className="rounded-lg bg-slate-900 px-4 py-2 text-white hover:bg-slate-800"
-                  onClick={logout}
+                  type="button"
+                  onClick={() => void runSearch(search.trim())}
+                  className="h-16 rounded-[1.2rem] bg-violet-600 px-8 text-base font-semibold text-white transition hover:bg-violet-500"
                 >
-                  Cerrar sesion
+                  {isLoadingSearch ? 'Buscando...' : 'Verificar ahora'}
                 </button>
               </div>
-            ) : (
-              <form className="space-y-2" onSubmit={submitAuth}>
+              <div className="mt-3 flex flex-wrap gap-4 text-sm text-slate-500">
+                <span>RUT detectado: {normalizedSearch.rut || 'No valido'}</span>
+                <span>Patente detectada: {normalizedSearch.plate || 'No valida'}</span>
+              </div>
+            </div>
+
+            <div className="relative mt-6 flex flex-wrap gap-3 text-sm text-slate-600">
+              <span className="rounded-full bg-slate-100 px-4 py-2">Busqueda instantanea</span>
+              <span className="rounded-full bg-slate-100 px-4 py-2">Moderacion previa</span>
+              <span className="rounded-full bg-slate-100 px-4 py-2">PostgreSQL portable</span>
+            </div>
+          </div>
+
+          <div className="grid gap-4">
+            <div className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-[0_20px_60px_rgba(15,23,42,0.06)]">
+              <p className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500">Aviso legal</p>
+              <p className="mt-3 text-sm leading-7 text-slate-600">{DISCLAIMER}</p>
+            </div>
+
+            <div className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-[0_20px_60px_rgba(15,23,42,0.06)]">
+              <p className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500">Acceso</p>
+              <form className="mt-4 space-y-3" onSubmit={submitAuth}>
                 <div className="flex gap-2">
                   <button
                     type="button"
-                    className={`rounded-lg px-3 py-1 text-sm ${authMode === 'login' ? 'bg-slate-900 text-white' : 'bg-slate-200'}`}
                     onClick={() => setAuthMode('login')}
+                    className={`rounded-xl px-4 py-2 text-sm ${authMode === 'login' ? 'bg-slate-950 text-white' : 'bg-slate-100 text-slate-600'}`}
                   >
                     Iniciar sesion
                   </button>
                   <button
                     type="button"
-                    className={`rounded-lg px-3 py-1 text-sm ${authMode === 'register' ? 'bg-slate-900 text-white' : 'bg-slate-200'}`}
                     onClick={() => setAuthMode('register')}
+                    className={`rounded-xl px-4 py-2 text-sm ${authMode === 'register' ? 'bg-slate-950 text-white' : 'bg-slate-100 text-slate-600'}`}
                   >
-                    Registrarse
+                    Crear cuenta
                   </button>
                 </div>
                 <input
                   type="email"
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
-                  placeholder="correo@ejemplo.cl"
+                  className="w-full rounded-xl border border-slate-200 px-4 py-3"
+                  placeholder="correo@empresa.cl"
                   value={authEmail}
-                  onChange={(e) => setAuthEmail(e.target.value)}
+                  onChange={(event) => setAuthEmail(event.target.value)}
                 />
                 <input
                   type="password"
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
-                  placeholder="Contrasena"
+                  className="w-full rounded-xl border border-slate-200 px-4 py-3"
+                  placeholder="Contrasena segura"
                   value={authPassword}
-                  onChange={(e) => setAuthPassword(e.target.value)}
+                  onChange={(event) => setAuthPassword(event.target.value)}
                 />
-                <button className="w-full rounded-lg bg-slate-900 px-4 py-2 text-white hover:bg-slate-800">
-                  {authMode === 'login' ? 'Entrar' : 'Crear cuenta'}
+                <button className="w-full rounded-xl bg-slate-950 px-4 py-3 font-medium text-white transition hover:bg-slate-800">
+                  {authMode === 'login' ? 'Entrar al panel' : 'Registrarme'}
                 </button>
-                {authError && <p className="text-sm text-red-700">{authError}</p>}
+                {authError && <p className="text-sm text-rose-700">{authError}</p>}
               </form>
-            )}
+            </div>
           </div>
-        </div>
+        </section>
 
-        <div className="mt-5 flex flex-wrap gap-2">
-          <button
-            className={`rounded-full px-4 py-2 text-sm ${activeTab === 'search' ? 'bg-slate-900 text-white' : 'bg-white/70'}`}
-            onClick={() => setActiveTab('search')}
-          >
-            Buscador
-          </button>
-          <button
-            className={`rounded-full px-4 py-2 text-sm ${activeTab === 'report' ? 'bg-slate-900 text-white' : 'bg-white/70'}`}
-            onClick={() => setActiveTab('report')}
-          >
-            Registrar reporte
-          </button>
-          <button
-            className={`rounded-full px-4 py-2 text-sm ${activeTab === 'admin' ? 'bg-slate-900 text-white' : 'bg-white/70'}`}
-            onClick={() => setActiveTab('admin')}
-          >
-            Moderacion admin
-          </button>
-        </div>
-      </header>
-
-      <main className="mx-auto max-w-6xl px-4 pb-12 md:px-6">
-        {activeTab === 'search' && (
-          <section className="rounded-3xl border border-slate-700/10 bg-white/70 p-5 shadow-lg backdrop-blur md:p-8">
-            <h2 className="font-display text-2xl">Buscador principal</h2>
-            <p className="mt-2 text-sm text-slate-700">
-              Busca por nombre, RUT o patente. El sistema normaliza tu entrada antes de consultar.
-            </p>
-
-            <form className="mt-4 flex flex-col gap-3 md:flex-row" onSubmit={runSearch}>
-              <input
-                className="flex-1 rounded-xl border border-slate-300 px-4 py-3"
-                placeholder="Ej: 12.345.678-k, AB12CD, nombre"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-              <button className="rounded-xl bg-emerald-700 px-6 py-3 font-semibold text-white hover:bg-emerald-600">
-                {isLoadingSearch ? 'Buscando...' : 'Buscar'}
-              </button>
-            </form>
-
-            <div className="mt-3 text-xs text-slate-600">
-              <p>RUT detectado: {normalizedSearch.rut || 'No valido'}</p>
-              <p>Patente detectada: {normalizedSearch.plate || 'No valida'}</p>
+        <section className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="font-display text-3xl text-slate-950">Resultados</h2>
+                <p className="mt-2 text-sm text-slate-500">Consulta en tiempo real sobre registros aprobados.</p>
+              </div>
+              {search.trim() ? (
+                searchResults.length > 0 ? <StatusBadge status="APPROVED" /> : <StatusBadge status="CLEAR" />
+              ) : null}
             </div>
 
-            {searchMessage && <p className="mt-4 text-sm text-amber-700">{searchMessage}</p>}
+            {search.trim() && (
+              <div className={`rounded-3xl border p-5 ${searchResults.length ? 'border-rose-200 bg-rose-50' : 'border-emerald-200 bg-emerald-50'}`}>
+                <p className="text-sm font-semibold text-slate-900">{searchMessage || 'Escribe un termino para buscar.'}</p>
+                <p className="mt-1 text-sm text-slate-600">
+                  {searchResults.length
+                    ? 'Revisa los detalles antes de transferir dinero o concretar una compra.'
+                    : 'No se encontraron coincidencias aprobadas para este registro.'}
+                </p>
+              </div>
+            )}
 
-            <div className="mt-6 grid gap-4 md:grid-cols-2">
-              {searchResults.map((item) => (
-                <article key={item.id} className="rounded-2xl border border-slate-300 bg-white p-4 shadow-sm">
-                  <div className="flex items-start justify-between gap-3">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-indigo-700">
-                      {item.type === 'SCAM' ? 'Estafa' : 'Vehiculo robado'}
-                    </p>
-                    <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
-                      {item.status === 'VERIFIED' ? 'Verificado' : 'Pendiente'}
-                    </span>
-                  </div>
-                  <p className="mt-3 text-sm text-slate-800">{item.description}</p>
-                  <p className="mt-3 text-xs text-slate-500">
-                    Fecha: {new Date(item.createdAt).toLocaleDateString('es-CL')}
-                  </p>
-                  <p className="text-xs text-slate-500">Nombre: {item.name || 'No informado'}</p>
-                  <p className="text-xs text-slate-500">RUT: {item.rut || 'No informado'}</p>
-                  <p className="text-xs text-slate-500">Patente: {item.plate || 'No informada'}</p>
-                </article>
+            <div className="grid gap-4">
+              {searchResults.map((report) => (
+                <ResultCard key={report.id} report={report} onSelect={(id) => void loadReportDetail(id)} />
               ))}
             </div>
-          </section>
-        )}
+          </div>
 
-        {activeTab === 'report' && (
-          <section className="rounded-3xl border border-slate-700/10 bg-white/70 p-5 shadow-lg backdrop-blur md:p-8">
-            <h2 className="font-display text-2xl">Registro de reportes</h2>
-            <p className="mt-2 text-sm text-slate-700">
-              Todos los reportes quedan en estado pendiente hasta ser aprobados por moderacion.
+          <aside className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-[0_20px_60px_rgba(15,23,42,0.06)]">
+            <p className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500">Detalle del reporte</p>
+            {selectedReport ? (
+              <div className="mt-4 space-y-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-2xl font-semibold text-slate-950">
+                      {selectedReport.name || selectedReport.rut || selectedReport.plate || `Reporte #${selectedReport.id}`}
+                    </h3>
+                    <p className="mt-1 text-sm text-slate-500">
+                      {selectedReport.type === 'SCAM' ? 'Posible estafa' : 'Vehiculo reportado'}
+                    </p>
+                  </div>
+                  <StatusBadge status={selectedReport.status} />
+                </div>
+                <p className="text-sm leading-7 text-slate-600">{selectedReport.description}</p>
+                <div className="grid gap-3 rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
+                  <p>RUT normalizado: {selectedReport.rut || 'No informado'}</p>
+                  <p>Patente normalizada: {selectedReport.plate || 'No informada'}</p>
+                  <p>Fecha: {new Date(selectedReport.createdAt).toLocaleDateString('es-CL')}</p>
+                </div>
+                {selectedReport.evidence.length > 0 && (
+                  <div>
+                    <p className="text-sm font-semibold text-slate-800">Evidencia</p>
+                    <div className="mt-3 space-y-2 text-sm text-violet-700">
+                      {selectedReport.evidence.map((item) => (
+                        <a key={item.id} href={item.url || '#'} target="_blank" rel="noreferrer" className="block rounded-xl bg-violet-50 px-4 py-3 hover:bg-violet-100">
+                          {item.url || item.text || 'Evidencia adjunta'}
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="mt-4 rounded-3xl bg-slate-50 p-6 text-sm leading-7 text-slate-500">
+                {detailMessage || 'Selecciona un resultado para revisar mas contexto.'}
+              </div>
+            )}
+          </aside>
+        </section>
+
+        <section id="reportar" className="mt-14 grid gap-6 lg:grid-cols-[1fr_0.85fr]">
+          <div className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-[0_20px_60px_rgba(15,23,42,0.06)] md:p-8">
+            <h2 className="font-display text-3xl text-slate-950">Crear reporte</h2>
+            <p className="mt-2 text-sm text-slate-500">
+              Todo reporte entra como pendiente y requiere revision manual antes de hacerse visible.
             </p>
 
-            <form className="mt-5 grid gap-4" onSubmit={submitReport}>
+            <form className="mt-6 grid gap-4" onSubmit={submitReport}>
               <select
-                className="rounded-xl border border-slate-300 px-3 py-2"
+                className="rounded-2xl border border-slate-200 px-4 py-3"
                 value={reportType}
-                onChange={(e) => setReportType(e.target.value as ReportType)}
+                onChange={(event) => setReportType(event.target.value as ReportType)}
               >
-                <option value="SCAM">Estafador</option>
-                <option value="STOLEN_VEHICLE">Vehiculo robado</option>
+                <option value="SCAM">Posible estafador</option>
+                <option value="VEHICLE">Vehiculo robado</option>
               </select>
-
               <input
-                className="rounded-xl border border-slate-300 px-3 py-2"
-                placeholder="Nombre (opcional)"
+                className="rounded-2xl border border-slate-200 px-4 py-3"
+                placeholder="Nombre o alias"
                 value={reportName}
-                onChange={(e) => setReportName(e.target.value)}
+                onChange={(event) => setReportName(event.target.value)}
               />
-
-              <div className="grid gap-3 md:grid-cols-2">
+              <div className="grid gap-4 md:grid-cols-2">
                 <input
-                  className="rounded-xl border border-slate-300 px-3 py-2"
-                  placeholder="RUT (opcional)"
+                  className="rounded-2xl border border-slate-200 px-4 py-3"
+                  placeholder="RUT"
                   value={reportRut}
-                  onChange={(e) => setReportRut(e.target.value)}
+                  onChange={(event) => setReportRut(event.target.value)}
                 />
                 <input
-                  className="rounded-xl border border-slate-300 px-3 py-2"
-                  placeholder="Patente (opcional)"
+                  className="rounded-2xl border border-slate-200 px-4 py-3"
+                  placeholder="Patente"
                   value={reportPlate}
-                  onChange={(e) => setReportPlate(e.target.value)}
+                  onChange={(event) => setReportPlate(event.target.value)}
                 />
               </div>
-
               <textarea
-                className="min-h-36 rounded-xl border border-slate-300 px-3 py-2"
-                placeholder="Descripcion detallada del hecho"
+                className="min-h-40 rounded-2xl border border-slate-200 px-4 py-3"
+                placeholder="Describe por que este registro representa un riesgo"
                 value={reportDescription}
-                onChange={(e) => setReportDescription(e.target.value)}
+                onChange={(event) => setReportDescription(event.target.value)}
               />
-
-              <textarea
-                className="min-h-20 rounded-xl border border-slate-300 px-3 py-2"
-                placeholder="Evidencia textual (opcional)"
-                value={evidenceText}
-                onChange={(e) => setEvidenceText(e.target.value)}
-              />
-
               <input
-                className="rounded-xl border border-slate-300 px-3 py-2"
-                placeholder="URL de imagen de evidencia (opcional)"
+                className="rounded-2xl border border-slate-200 px-4 py-3"
+                placeholder="URL de evidencia"
                 value={evidenceUrl}
-                onChange={(e) => setEvidenceUrl(e.target.value)}
+                onChange={(event) => setEvidenceUrl(event.target.value)}
               />
-
-              <label className="flex items-start gap-3 rounded-xl bg-amber-50 p-3 text-sm text-amber-900">
+              <label className="flex gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4 text-sm text-amber-900">
                 <input
                   type="checkbox"
-                  checked={acceptedDisclaimer}
-                  onChange={(e) => setAcceptedDisclaimer(e.target.checked)}
                   className="mt-1"
+                  checked={acceptedDisclaimer}
+                  onChange={(event) => setAcceptedDisclaimer(event.target.checked)}
                 />
-                <span>Declaro haber leido y aceptado el disclaimer legal antes de enviar este reporte.</span>
+                <span>{DISCLAIMER}</span>
               </label>
-
               <button
-                className="rounded-xl bg-slate-900 px-4 py-3 font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+                className="rounded-2xl bg-violet-600 px-5 py-3 font-semibold text-white transition hover:bg-violet-500 disabled:opacity-60"
                 disabled={isSubmittingReport}
               >
-                {isSubmittingReport ? 'Enviando...' : 'Enviar a moderacion'}
+                {isSubmittingReport ? 'Enviando...' : 'Enviar a revision'}
               </button>
-
-              {reportMessage && <p className="text-sm text-indigo-700">{reportMessage}</p>}
+              {reportMessage && <p className="text-sm text-slate-600">{reportMessage}</p>}
             </form>
-          </section>
-        )}
+          </div>
 
-        {activeTab === 'admin' && (
-          <section className="rounded-3xl border border-slate-700/10 bg-white/70 p-5 shadow-lg backdrop-blur md:p-8">
-            <div className="flex items-center justify-between gap-3">
-              <h2 className="font-display text-2xl">Panel de moderacion</h2>
-              <button
-                className="rounded-xl bg-slate-900 px-4 py-2 text-white hover:bg-slate-800"
-                onClick={loadPendingReports}
-              >
-                Cargar pendientes
-              </button>
+          <div className="grid gap-4">
+            <div className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-[0_20px_60px_rgba(15,23,42,0.06)]">
+              <p className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500">Por que esta preparado para crecer</p>
+              <ul className="mt-4 space-y-3 text-sm leading-7 text-slate-600">
+                <li>Frontend y backend separados en carpetas independientes.</li>
+                <li>Prisma usa solo `DATABASE_URL`, por lo que salir de Railway no requiere refactor.</li>
+                <li>Funciones de normalizacion reutilizables para RUT y patente.</li>
+                <li>API modular con controladores, middlewares y validacion centralizada.</li>
+              </ul>
             </div>
+            <div className="rounded-[2rem] border border-slate-200 bg-gradient-to-br from-violet-600 to-blue-600 p-6 text-white shadow-[0_20px_60px_rgba(79,70,229,0.32)]">
+              <p className="text-sm font-semibold uppercase tracking-[0.18em] text-violet-100">Estado del sistema</p>
+              <div className="mt-4 grid gap-4 md:grid-cols-3">
+                <div>
+                  <p className="text-3xl font-semibold">JWT</p>
+                  <p className="text-sm text-violet-100">Sesion segura</p>
+                </div>
+                <div>
+                  <p className="text-3xl font-semibold">Prisma</p>
+                  <p className="text-sm text-violet-100">Migraciones controladas</p>
+                </div>
+                <div>
+                  <p className="text-3xl font-semibold">Railway</p>
+                  <p className="text-sm text-violet-100">Solo como host inicial</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
 
-            {!isAdmin && (
-              <p className="mt-3 rounded-xl bg-red-50 p-3 text-sm text-red-700">
-                Solo un administrador autenticado puede aprobar, rechazar o eliminar reportes.
-              </p>
-            )}
+        <section id="moderacion" className="mt-14 rounded-[2rem] border border-slate-200 bg-white p-6 shadow-[0_20px_60px_rgba(15,23,42,0.06)] md:p-8">
+          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 className="font-display text-3xl text-slate-950">Moderacion admin</h2>
+              <p className="mt-2 text-sm text-slate-500">Aprueba o rechaza reportes antes de publicarlos.</p>
+            </div>
+            <button className="rounded-2xl bg-slate-950 px-5 py-3 font-medium text-white hover:bg-slate-800" onClick={() => void loadPendingReports()}>
+              Cargar pendientes
+            </button>
+          </div>
 
-            {adminMessage && <p className="mt-3 text-sm text-amber-700">{adminMessage}</p>}
+          {!isAdmin && (
+            <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+              Debes iniciar sesion como administrador para usar este panel.
+            </div>
+          )}
 
-            <div className="mt-5 grid gap-4">
-              {pendingReports.map((item) => (
-                <article key={item.id} className="rounded-2xl border border-slate-300 bg-white p-4 shadow-sm">
-                  <p className="text-xs uppercase tracking-wide text-rose-700">Pendiente #{item.id}</p>
-                  <p className="mt-2 text-sm">{item.description}</p>
-                  <p className="mt-2 text-xs text-slate-500">
-                    {item.type === 'SCAM' ? 'Estafa' : 'Vehiculo robado'} | RUT: {item.rut || 'N/A'} |
-                    Patente: {item.plate || 'N/A'}
-                  </p>
+          {adminMessage && <p className="mt-5 text-sm text-slate-600">{adminMessage}</p>}
 
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    <button
-                      className="rounded-lg bg-emerald-600 px-3 py-2 text-sm text-white hover:bg-emerald-500"
-                      onClick={() => moderateReport(item.id, 'APPROVE')}
-                    >
-                      Aprobar
-                    </button>
-                    <button
-                      className="rounded-lg bg-orange-600 px-3 py-2 text-sm text-white hover:bg-orange-500"
-                      onClick={() => moderateReport(item.id, 'REJECT')}
-                    >
-                      Rechazar
-                    </button>
-                    <button
-                      className="rounded-lg bg-red-700 px-3 py-2 text-sm text-white hover:bg-red-600"
-                      onClick={() => deleteReport(item.id)}
-                    >
-                      Eliminar
-                    </button>
+          <div className="mt-6 grid gap-4">
+            {pendingReports.map((report) => (
+              <article key={report.id} className="rounded-3xl border border-slate-200 bg-slate-50 p-5">
+                <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.22em] text-amber-600">Pendiente</p>
+                    <h3 className="mt-2 text-lg font-semibold text-slate-900">
+                      {report.name || report.rut || report.plate || `Reporte #${report.id}`}
+                    </h3>
+                    <p className="mt-2 text-sm leading-7 text-slate-600">{report.description}</p>
                   </div>
-                </article>
-              ))}
-            </div>
-          </section>
-        )}
+                  <StatusBadge status="PENDING" />
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500" onClick={() => void moderateReport(report.id, 'APPROVE')}>
+                    Aprobar
+                  </button>
+                  <button className="rounded-xl bg-amber-500 px-4 py-2 text-sm font-medium text-white hover:bg-amber-400" onClick={() => void moderateReport(report.id, 'REJECT')}>
+                    Rechazar
+                  </button>
+                  <button className="rounded-xl bg-rose-600 px-4 py-2 text-sm font-medium text-white hover:bg-rose-500" onClick={() => void deleteReport(report.id)}>
+                    Eliminar
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
       </main>
     </div>
   )

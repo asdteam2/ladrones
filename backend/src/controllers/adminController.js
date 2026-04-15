@@ -36,7 +36,7 @@ async function moderateReport(req, res) {
     return res.status(400).json({ error: parsed.error.issues[0].message });
   }
 
-  const status = parsed.data.action === 'APPROVE' ? 'VERIFIED' : 'REJECTED';
+  const status = parsed.data.action === 'APPROVE' ? 'APPROVED' : 'REJECTED';
   const moderationNote = sanitizeOptionalText(parsed.data.moderationNote);
 
   const updated = await prisma.report.update({

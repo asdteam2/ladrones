@@ -5,7 +5,7 @@ const { sanitizeOptionalText, sanitizeText } = require('../utils/sanitize');
 
 function buildSearchWhere(query) {
   const where = {
-    status: 'VERIFIED',
+    status: 'APPROVED',
   };
 
   const normalizedQuery = normalizeWhitespace(query);
@@ -49,6 +49,30 @@ async function searchReports(req, res) {
   });
 }
 
+async function getReportById(req, res) {
+  const reportId = Number(req.params.id);
+  if (Number.isNaN(reportId)) {
+    return res.status(400).json({ error: 'ID invalido' });
+  }
+
+  const isAdmin = req.user?.role === 'ADMIN';
+  const report = await prisma.report.findFirst({
+    where: {
+      id: reportId,
+      ...(isAdmin ? {} : { status: 'APPROVED' }),
+    },
+    include: {
+      evidence: true,
+    },
+  });
+
+  if (!report) {
+    return res.status(404).json({ error: 'Reporte no encontrado' });
+  }
+
+  return res.json({ item: report });
+}
+
 async function createReport(req, res) {
   const parsed = reportSchema.safeParse(req.body);
 
@@ -78,7 +102,7 @@ async function createReport(req, res) {
       plate: normalizedPlate.value,
       description,
       status: {
-        in: ['PENDING', 'VERIFIED'],
+        in: ['PENDING', 'APPROVED'],
       },
     },
     select: { id: true },
@@ -126,5 +150,6 @@ async function createReport(req, res) {
 
 module.exports = {
   searchReports,
+  getReportById,
   createReport,
 };

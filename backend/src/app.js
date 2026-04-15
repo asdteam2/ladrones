@@ -5,6 +5,7 @@ const morgan = require('morgan');
 const authRoutes = require('./routes/authRoutes');
 const reportRoutes = require('./routes/reportRoutes');
 const adminRoutes = require('./routes/adminRoutes');
+const { searchReports } = require('./controllers/reportController');
 const { apiLimiter } = require('./middlewares/rateLimiter');
 const notFound = require('./middlewares/notFound');
 const errorHandler = require('./middlewares/errorHandler');
@@ -24,6 +25,8 @@ app.use(apiLimiter);
 app.get('/api/health', (req, res) => {
   res.json({ ok: true });
 });
+
+app.get('/api/search', searchReports);
 
 app.use('/api/auth', authRoutes);
 app.use('/api/reports', reportRoutes);

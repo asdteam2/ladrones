@@ -68,6 +68,10 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true });
 });
 
+app.get('/api/salud', (req, res) => {
+  res.json({ ok: true });
+});
+
 app.get('/api/search', searchReports);
 
 app.use('/api/auth', authRoutes);
